@@ -56,6 +56,38 @@ describe("detectComposerTrigger", () => {
       rangeEnd: text.length,
     });
   });
+
+  it("detects $skill trigger at cursor", () => {
+    const text = "Use $skill-cre";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toEqual({
+      kind: "skill",
+      query: "skill-cre",
+      rangeStart: "Use ".length,
+      rangeEnd: text.length,
+    });
+  });
+
+  it("detects $ alone as skill trigger with empty query", () => {
+    const text = "Hello $";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toEqual({
+      kind: "skill",
+      query: "",
+      rangeStart: "Hello ".length,
+      rangeEnd: text.length,
+    });
+  });
+
+  it("prefers skill trigger over path trigger when both prefixes present", () => {
+    const text = "$linear";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger?.kind).toBe("skill");
+    expect(trigger?.query).toBe("linear");
+  });
 });
 
 describe("replaceTextRange", () => {

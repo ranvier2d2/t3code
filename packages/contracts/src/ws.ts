@@ -32,6 +32,7 @@ import {
 } from "./terminal";
 import { KeybindingRule } from "./keybindings";
 import { ProjectSearchEntriesInput, ProjectWriteFileInput } from "./project";
+import { SkillsListInput } from "./skill";
 import { OpenInEditorInput } from "./editor";
 
 // ── WebSocket RPC Method Names ───────────────────────────────────────
@@ -67,6 +68,9 @@ export const WS_METHODS = {
   terminalClear: "terminal.clear",
   terminalRestart: "terminal.restart",
   terminalClose: "terminal.close",
+
+  // Skills
+  skillsList: "skills.list",
 
   // Server meta
   serverGetConfig: "server.getConfig",
@@ -131,6 +135,9 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.terminalClear, TerminalClearInput),
   tagRequestBody(WS_METHODS.terminalRestart, TerminalRestartInput),
   tagRequestBody(WS_METHODS.terminalClose, TerminalCloseInput),
+
+  // Skills
+  tagRequestBody(WS_METHODS.skillsList, SkillsListInput),
 
   // Server meta
   tagRequestBody(WS_METHODS.serverGetConfig, Schema.Struct({})),

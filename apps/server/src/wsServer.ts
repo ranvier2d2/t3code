@@ -254,6 +254,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   const terminalManager = yield* TerminalManager;
   const keybindingsManager = yield* Keybindings;
   const providerHealth = yield* ProviderHealth;
+  const providerService = yield* ProviderService;
   const git = yield* GitCore;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -898,6 +899,12 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
       case WS_METHODS.terminalClose: {
         const body = stripRequestTag(request.body);
         return yield* terminalManager.close(body);
+      }
+
+      case WS_METHODS.skillsList: {
+        const body = stripRequestTag(request.body);
+        const skills = yield* providerService.listSkills(body.cwd);
+        return { skills };
       }
 
       case WS_METHODS.serverGetConfig:

@@ -69,6 +69,7 @@ function createProviderServiceHarness() {
     listSessions: () => Effect.succeed([]),
     getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
     rollbackConversation: () => unsupported(),
+    listSkills: () => Effect.succeed([]),
     streamEvents: Stream.fromPubSub(runtimeEventPubSub),
   };
 

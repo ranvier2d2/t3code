@@ -16,6 +16,7 @@ import type {
   ProviderSendTurnInput,
   ProviderSession,
   ProviderSessionStartInput,
+  Skill,
   ThreadId,
   ProviderTurnStartResult,
   TurnId,
@@ -118,6 +119,11 @@ export interface ProviderAdapterShape<TError> {
    * Stop all sessions owned by this adapter.
    */
   readonly stopAll: () => Effect.Effect<void, TError>;
+
+  /**
+   * List skills visible to this provider for a given working directory.
+   */
+  readonly listSkills: (cwd: string) => Effect.Effect<ReadonlyArray<Skill>>;
 
   /**
    * Canonical runtime event stream emitted by this adapter.

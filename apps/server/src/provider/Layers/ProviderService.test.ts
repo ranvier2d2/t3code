@@ -188,6 +188,7 @@ function makeFakeCodexAdapter(provider: ProviderKind = "codex") {
     readThread,
     rollbackThread,
     stopAll,
+    listSkills: vi.fn(() => Effect.succeed([])),
     streamEvents: Stream.fromPubSub(runtimeEventPubSub),
   };
 

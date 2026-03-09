@@ -24,6 +24,7 @@ const fakeCodexAdapter: CodexAdapterShape = {
   readThread: vi.fn(),
   rollbackThread: vi.fn(),
   stopAll: vi.fn(),
+  listSkills: vi.fn(() => Effect.succeed([])),
   streamEvents: Stream.empty,
 };
 

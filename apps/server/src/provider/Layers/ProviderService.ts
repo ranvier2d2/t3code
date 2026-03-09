@@ -475,6 +475,16 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const getCapabilities: ProviderServiceShape["getCapabilities"] = (provider) =>
       registry.getByProvider(provider).pipe(Effect.map((adapter) => adapter.capabilities));
 
+    const listSkills: ProviderServiceShape["listSkills"] = (cwd) =>
+      Effect.gen(function* () {
+        const results = yield* Effect.forEach(
+          adapters,
+          (adapter) => adapter.listSkills(cwd),
+          { concurrency: "unbounded" },
+        );
+        return results.flat();
+      });
+
     const rollbackConversation: ProviderServiceShape["rollbackConversation"] = (rawInput) =>
       Effect.gen(function* () {
         const input = yield* decodeInputOrValidationError({
@@ -538,6 +548,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       stopSession,
       listSessions,
       getCapabilities,
+      listSkills,
       rollbackConversation,
       streamEvents: Stream.fromPubSub(runtimeEventPubSub),
     } satisfies ProviderServiceShape;

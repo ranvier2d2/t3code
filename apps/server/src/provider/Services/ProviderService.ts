@@ -21,6 +21,7 @@ import type {
   ProviderSession,
   ProviderSessionStartInput,
   ProviderStopSessionInput,
+  Skill,
   ThreadId,
   ProviderTurnStartResult,
 } from "@t3tools/contracts";
@@ -98,6 +99,13 @@ export interface ProviderServiceShape {
     readonly threadId: ThreadId;
     readonly numTurns: number;
   }) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
+   * List skills visible to providers for a given working directory.
+   */
+  readonly listSkills: (
+    cwd: string,
+  ) => Effect.Effect<ReadonlyArray<Skill>, ProviderServiceError>;
 
   /**
    * Canonical provider runtime event stream.

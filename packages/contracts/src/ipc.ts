@@ -24,6 +24,7 @@ import type {
   ProjectWriteFileInput,
   ProjectWriteFileResult,
 } from "./project";
+import type { SkillsListInput, SkillsListResult } from "./skill";
 import type { ServerConfig } from "./server";
 import type {
   TerminalClearInput,
@@ -152,6 +153,9 @@ export interface NativeApi {
       items: readonly ContextMenuItem<T>[],
       position?: { x: number; y: number },
     ) => Promise<T | null>;
+  };
+  skills: {
+    list: (input: SkillsListInput) => Promise<SkillsListResult>;
   };
   server: {
     getConfig: () => Promise<ServerConfig>;
