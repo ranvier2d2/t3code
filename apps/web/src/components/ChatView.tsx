@@ -534,13 +534,13 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
           model
         </Badge>
       ) : null}
-      <span className="flex min-w-0 items-center gap-1.5 truncate">
+      <span className="flex shrink-0 items-center gap-1.5">
         {props.item.type === "model" && props.item.showFastBadge ? (
           <ZapIcon className="size-3.5 shrink-0 text-amber-500" />
         ) : null}
-        <span className="truncate">{props.item.label}</span>
+        <span>{props.item.label}</span>
       </span>
-      <span className="truncate text-muted-foreground/70 text-xs">{props.item.description}</span>
+      <span className="min-w-0 truncate text-muted-foreground/70 text-xs">{props.item.description}</span>
     </CommandItem>
   );
 });
