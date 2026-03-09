@@ -62,15 +62,19 @@ interface CodexUserInputAnswer {
   answers: string[];
 }
 
-interface CodexSessionContext {
-  session: ProviderSession;
-  account: CodexAccountSnapshot;
+/** Minimal handle for JSON-RPC request/response over a child process. */
+interface JsonRpcProcessHandle {
   child: ChildProcessWithoutNullStreams;
   output: readline.Interface;
   pending: Map<PendingRequestKey, PendingRequest>;
+  nextRequestId: number;
+}
+
+interface CodexSessionContext extends JsonRpcProcessHandle {
+  session: ProviderSession;
+  account: CodexAccountSnapshot;
   pendingApprovals: Map<ApprovalRequestId, PendingApprovalRequest>;
   pendingUserInputs: Map<ApprovalRequestId, PendingUserInputRequest>;
-  nextRequestId: number;
   stopping: boolean;
 }
 
@@ -526,6 +530,8 @@ export interface CodexAppServerManagerEvents {
 
 export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEvents> {
   private readonly sessions = new Map<ThreadId, CodexSessionContext>();
+  private skillsHandle: JsonRpcProcessHandle | null = null;
+  private skillsHandlePromise: Promise<JsonRpcProcessHandle> | null = null;
 
   private runPromise: (effect: Effect.Effect<unknown, never>) => Promise<unknown>;
   constructor(services?: ServiceMap.ServiceMap<never>) {
@@ -876,14 +882,91 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     });
   }
 
-  async listSkills(cwd: string): Promise<CodexSkill[]> {
-    // Use any active session's codex app-server process to query skills.
-    const context = this.sessions.values().next().value as CodexSessionContext | undefined;
-    if (!context) {
-      return [];
+  /**
+   * Lazily start a lightweight codex app-server used only for metadata queries
+   * like `skills/list`. The process is initialized once and reused across calls.
+   */
+  private async ensureSkillsHandle(cwd: string): Promise<JsonRpcProcessHandle> {
+    if (this.skillsHandle) {
+      return this.skillsHandle;
     }
+    if (this.skillsHandlePromise) {
+      return this.skillsHandlePromise;
+    }
+
+    this.skillsHandlePromise = (async () => {
+      const child = spawn("codex", ["app-server"], {
+        cwd,
+        env: { ...process.env },
+        stdio: ["pipe", "pipe", "pipe"],
+        shell: process.platform === "win32",
+      });
+      const output = readline.createInterface({ input: child.stdout });
+      const handle: JsonRpcProcessHandle = {
+        child,
+        output,
+        pending: new Map(),
+        nextRequestId: 1,
+      };
+
+      // Route JSON-RPC responses back to pending requests.
+      output.on("line", (line) => {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(line);
+        } catch {
+          return;
+        }
+        if (parsed && typeof parsed === "object" && "id" in (parsed as object)) {
+          this.handleResponse(handle, parsed as JsonRpcResponse);
+        }
+      });
+
+      // Clean up on unexpected exit so the next call re-spawns.
+      child.on("exit", () => {
+        if (this.skillsHandle === handle) {
+          this.skillsHandle = null;
+        }
+      });
+      child.on("error", () => {
+        if (this.skillsHandle === handle) {
+          this.skillsHandle = null;
+        }
+      });
+      child.stderr.resume(); // drain stderr to avoid backpressure
+
+      await this.sendRequest(handle, "initialize", buildCodexInitializeParams());
+      this.writeMessage(handle, { method: "initialized" });
+
+      this.skillsHandle = handle;
+      this.skillsHandlePromise = null;
+      return handle;
+    })();
+
     try {
-      const response = await this.sendRequest(context, "skills/list", {
+      return await this.skillsHandlePromise;
+    } catch (error) {
+      this.skillsHandlePromise = null;
+      throw error;
+    }
+  }
+
+  /** Tear down the skills-only app-server process if running. */
+  stopSkillsHandle(): void {
+    const handle = this.skillsHandle;
+    this.skillsHandle = null;
+    this.skillsHandlePromise = null;
+    if (handle) {
+      handle.child.kill();
+    }
+  }
+
+  async listSkills(cwd: string): Promise<CodexSkill[]> {
+    // Prefer an active session's process; fall back to dedicated skills handle.
+    const context = this.sessions.values().next().value as CodexSessionContext | undefined;
+    const handle = context ?? (await this.ensureSkillsHandle(cwd));
+    try {
+      const response = await this.sendRequest(handle, "skills/list", {
         cwds: [cwd],
         forceReload: false,
       });
@@ -1099,6 +1182,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     for (const threadId of this.sessions.keys()) {
       this.stopSession(threadId);
     }
+    this.stopSkillsHandle();
   }
 
   private requireSession(threadId: ThreadId): CodexSessionContext {
@@ -1331,15 +1415,15 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     });
   }
 
-  private handleResponse(context: CodexSessionContext, response: JsonRpcResponse): void {
+  private handleResponse(handle: JsonRpcProcessHandle, response: JsonRpcResponse): void {
     const key = String(response.id);
-    const pending = context.pending.get(key);
+    const pending = handle.pending.get(key);
     if (!pending) {
       return;
     }
 
     clearTimeout(pending.timeout);
-    context.pending.delete(key);
+    handle.pending.delete(key);
 
     if (response.error?.message) {
       pending.reject(new Error(`${pending.method} failed: ${String(response.error.message)}`));
@@ -1350,27 +1434,27 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   private async sendRequest<TResponse>(
-    context: CodexSessionContext,
+    handle: JsonRpcProcessHandle,
     method: string,
     params: unknown,
     timeoutMs = 20_000,
   ): Promise<TResponse> {
-    const id = context.nextRequestId;
-    context.nextRequestId += 1;
+    const id = handle.nextRequestId;
+    handle.nextRequestId += 1;
 
     const result = await new Promise<unknown>((resolve, reject) => {
       const timeout = setTimeout(() => {
-        context.pending.delete(String(id));
+        handle.pending.delete(String(id));
         reject(new Error(`Timed out waiting for ${method}.`));
       }, timeoutMs);
 
-      context.pending.set(String(id), {
+      handle.pending.set(String(id), {
         method,
         timeout,
         resolve,
         reject,
       });
-      this.writeMessage(context, {
+      this.writeMessage(handle, {
         method,
         id,
         params,
@@ -1380,13 +1464,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     return result as TResponse;
   }
 
-  private writeMessage(context: CodexSessionContext, message: unknown): void {
+  private writeMessage(handle: JsonRpcProcessHandle, message: unknown): void {
     const encoded = JSON.stringify(message);
-    if (!context.child.stdin.writable) {
+    if (!handle.child.stdin.writable) {
       throw new Error("Cannot write to codex app-server stdin.");
     }
 
-    context.child.stdin.write(`${encoded}\n`);
+    handle.child.stdin.write(`${encoded}\n`);
   }
 
   private emitLifecycleEvent(context: CodexSessionContext, method: string, message: string): void {
