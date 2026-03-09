@@ -16,6 +16,7 @@ import {
   type ProviderApprovalDecision,
   type ServerProviderStatus,
   type ProviderKind,
+  type Skill,
   type ThreadId,
   type TurnId,
   OrchestrationThreadActivity,
@@ -49,6 +50,7 @@ import {
 } from "@tanstack/react-virtual";
 import { gitBranchesQueryOptions, gitCreateWorktreeMutationOptions } from "~/lib/gitReactQuery";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
+import { skillsListQueryOptions } from "~/lib/skillsReactQuery";
 import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
 
 import { isElectron } from "../env";
@@ -262,6 +264,7 @@ const IMAGE_ONLY_BOOTSTRAP_PROMPT =
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const EMPTY_PROJECT_ENTRIES: ProjectEntry[] = [];
+const EMPTY_SKILLS: Skill[] = [];
 const EMPTY_AVAILABLE_EDITORS: EditorId[] = [];
 const EMPTY_PROVIDER_STATUSES: ServerProviderStatus[] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
@@ -411,6 +414,14 @@ type ComposerCommandItem =
       label: string;
       description: string;
       showFastBadge: boolean;
+    }
+  | {
+      id: string;
+      type: "skill";
+      skillName: string;
+      skillPath?: string;
+      label: string;
+      description: string;
     };
 
 type SendPhase = "idle" | "preparing-worktree" | "sending-turn";
@@ -515,6 +526,9 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
       {props.item.type === "slash-command" ? (
         <BotIcon className="size-4 text-muted-foreground/80" />
       ) : null}
+      {props.item.type === "skill" ? (
+        <ZapIcon className="size-4 shrink-0 text-purple-500/80" />
+      ) : null}
       {props.item.type === "model" ? (
         <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
           model
@@ -564,10 +578,14 @@ const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
         {props.items.length === 0 && (
           <p className="px-3 py-2 text-muted-foreground/70 text-xs">
             {props.isLoading
-              ? "Searching workspace files..."
+              ? props.triggerKind === "skill"
+                ? "Loading skills..."
+                : "Searching workspace files..."
               : props.triggerKind === "path"
                 ? "No matching files or folders."
-                : "No matching command."}
+                : props.triggerKind === "skill"
+                  ? "No skills found."
+                  : "No matching command."}
           </p>
         )}
       </div>
@@ -1176,6 +1194,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const composerTriggerKind = composerTrigger?.kind ?? null;
   const pathTriggerQuery = composerTrigger?.kind === "path" ? composerTrigger.query : "";
   const isPathTrigger = composerTriggerKind === "path";
+  const isSkillTrigger = composerTriggerKind === "skill";
+  const skillTriggerQuery = composerTrigger?.kind === "skill" ? composerTrigger.query : "";
   const [debouncedPathQuery, composerPathQueryDebouncer] = useDebouncedValue(
     pathTriggerQuery,
     { wait: COMPOSER_PATH_QUERY_DEBOUNCE_MS },
@@ -1193,8 +1213,40 @@ export default function ChatView({ threadId }: ChatViewProps) {
     }),
   );
   const workspaceEntries = workspaceEntriesQuery.data?.entries ?? EMPTY_PROJECT_ENTRIES;
+  const skillsQuery = useQuery(
+    skillsListQueryOptions({
+      cwd: gitCwd,
+      enabled: isSkillTrigger,
+    }),
+  );
+  const availableSkills = skillsQuery.data?.skills ?? EMPTY_SKILLS;
   const composerMenuItems = useMemo<ComposerCommandItem[]>(() => {
     if (!composerTrigger) return [];
+    if (composerTrigger.kind === "skill") {
+      const query = skillTriggerQuery.trim().toLowerCase();
+      return availableSkills
+        .filter((skill) => {
+          if (!query) return true;
+          return (
+            skill.name.toLowerCase().includes(query) ||
+            skill.description.toLowerCase().includes(query) ||
+            (skill.interface?.displayName?.toLowerCase().includes(query) ?? false)
+          );
+        })
+        .map((skill) => {
+          const item: Extract<ComposerCommandItem, { type: "skill" }> = {
+            id: `skill:${skill.name}`,
+            type: "skill",
+            skillName: skill.name,
+            label: skill.interface?.displayName ?? skill.name,
+            description: skill.description,
+          };
+          if (skill.path) {
+            item.skillPath = skill.path;
+          }
+          return item;
+        });
+    }
     if (composerTrigger.kind === "path") {
       return workspaceEntries.map((entry) => ({
         id: `path:${entry.kind}:${entry.path}`,
@@ -1257,7 +1309,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         showFastBadge:
           provider === "codex" && shouldShowFastTierIcon(slug, selectedServiceTierSetting),
       }));
-  }, [composerTrigger, searchableModelOptions, selectedServiceTierSetting, workspaceEntries]);
+  }, [composerTrigger, searchableModelOptions, selectedServiceTierSetting, workspaceEntries, availableSkills, skillTriggerQuery]);
   const composerMenuOpen = Boolean(composerTrigger);
   const activeComposerMenuItem = useMemo(
     () =>
@@ -3239,6 +3291,18 @@ export default function ChatView({ threadId }: ChatViewProps) {
       const { snapshot, trigger } = resolveActiveComposerTrigger();
       if (!trigger) return;
       const expectedToken = snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd);
+      if (item.type === "skill") {
+        const applied = applyPromptReplacement(
+          trigger.rangeStart,
+          trigger.rangeEnd,
+          `$${item.skillName} `,
+          { expectedText: expectedToken },
+        );
+        if (applied) {
+          setComposerHighlightedItemId(null);
+        }
+        return;
+      }
       if (item.type === "path") {
         const applied = applyPromptReplacement(
           trigger.rangeStart,
@@ -3307,10 +3371,11 @@ export default function ChatView({ threadId }: ChatViewProps) {
     [composerHighlightedItemId, composerMenuItems],
   );
   const isComposerMenuLoading =
-    composerTriggerKind === "path" &&
-    ((pathTriggerQuery.length > 0 && composerPathQueryDebouncer.state.isPending) ||
-      workspaceEntriesQuery.isLoading ||
-      workspaceEntriesQuery.isFetching);
+    (composerTriggerKind === "path" &&
+      ((pathTriggerQuery.length > 0 && composerPathQueryDebouncer.state.isPending) ||
+        workspaceEntriesQuery.isLoading ||
+        workspaceEntriesQuery.isFetching)) ||
+    (composerTriggerKind === "skill" && (skillsQuery.isLoading || skillsQuery.isFetching));
 
   const onPromptChange = useCallback(
     (nextPrompt: string, nextCursor: number, cursorAdjacentToMention: boolean) => {
@@ -3675,7 +3740,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
                       ? "Add feedback to refine the plan, or leave this blank to implement it"
                       : phase === "disconnected"
                         ? "Ask for follow-up changes or attach images"
-                        : "Ask anything, @tag files/folders, or use /model"
+                        : "Ask anything, @tag files/folders, $skills, or use /model"
                 }
                 disabled={isConnecting || isComposerApprovalState}
               />
