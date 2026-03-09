@@ -12,6 +12,7 @@ import {
   type ProviderEvent,
   type ProviderRuntimeEvent,
   type ProviderUserInputAnswers,
+  type Skill,
   RuntimeItemId,
   RuntimeRequestId,
   RuntimeTaskId,
@@ -1490,6 +1491,12 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         }),
     );
 
+    const listSkills: CodexAdapterShape["listSkills"] = (cwd) =>
+      Effect.tryPromise({
+        try: () => manager.listSkills(cwd),
+        catch: () => [] as Skill[],
+      }).pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<Skill>));
+
     return {
       provider: PROVIDER,
       capabilities: {
@@ -1505,6 +1512,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       stopSession,
       listSessions,
       hasSession,
+      listSkills,
       stopAll,
       streamEvents: Stream.fromQueue(runtimeEventQueue),
     } satisfies CodexAdapterShape;

@@ -113,9 +113,21 @@ interface CodexAccountSnapshot {
   readonly sparkEnabled: boolean;
 }
 
+export interface CodexSkill {
+  readonly name: string;
+  readonly description: string;
+  readonly path?: string;
+  readonly enabled: boolean;
+  readonly interface?: {
+    readonly displayName?: string;
+    readonly shortDescription?: string;
+  };
+}
+
 export interface CodexAppServerSendTurnInput {
   readonly threadId: ThreadId;
   readonly input?: string;
+  readonly skillInputs?: ReadonlyArray<{ type: "skill"; name: string; path: string }>;
   readonly attachments?: ReadonlyArray<{ type: "image"; url: string }>;
   readonly model?: string;
   readonly serviceTier?: string | null;
@@ -734,13 +746,22 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const context = this.requireSession(input.threadId);
 
     const turnInput: Array<
-      { type: "text"; text: string; text_elements: [] } | { type: "image"; url: string }
+      | { type: "text"; text: string; text_elements: [] }
+      | { type: "image"; url: string }
+      | { type: "skill"; name: string; path: string }
     > = [];
     if (input.input) {
       turnInput.push({
         type: "text",
         text: input.input,
         text_elements: [],
+      });
+    }
+    for (const skillInput of input.skillInputs ?? []) {
+      turnInput.push({
+        type: "skill",
+        name: skillInput.name,
+        path: skillInput.path,
       });
     }
     for (const attachment of input.attachments ?? []) {
@@ -766,7 +787,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const turnStartParams: {
       threadId: string;
       input: Array<
-        { type: "text"; text: string; text_elements: [] } | { type: "image"; url: string }
+        | { type: "text"; text: string; text_elements: [] }
+        | { type: "image"; url: string }
+        | { type: "skill"; name: string; path: string }
       >;
       model?: string;
       serviceTier?: string | null;
@@ -851,6 +874,67 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       threadId: providerThreadId,
       turnId: effectiveTurnId,
     });
+  }
+
+  async listSkills(cwd: string): Promise<CodexSkill[]> {
+    // Use any active session's codex app-server process to query skills.
+    const context = this.sessions.values().next().value as CodexSessionContext | undefined;
+    if (!context) {
+      return [];
+    }
+    try {
+      const response = await this.sendRequest(context, "skills/list", {
+        cwds: [cwd],
+        forceReload: false,
+      });
+      const record = this.readObject(response);
+      if (!record) {
+        return [];
+      }
+      const data = record.data;
+      if (!Array.isArray(data) || data.length === 0) {
+        return [];
+      }
+      const cwdEntry = data[0] as { skills?: unknown[] };
+      if (!Array.isArray(cwdEntry.skills)) {
+        return [];
+      }
+      const skills: CodexSkill[] = [];
+      for (const raw of cwdEntry.skills) {
+        if (
+          typeof raw !== "object" ||
+          raw === null ||
+          typeof (raw as Record<string, unknown>).name !== "string" ||
+          typeof (raw as Record<string, unknown>).description !== "string"
+        ) {
+          continue;
+        }
+        const s = raw as {
+          name: string;
+          description: string;
+          enabled?: boolean;
+          path?: string;
+          interface?: { displayName?: string; shortDescription?: string };
+        };
+        if (s.enabled === false) continue;
+        const skill: CodexSkill = {
+          name: s.name,
+          description: s.description,
+          enabled: s.enabled ?? true,
+        };
+        if (s.path) {
+          (skill as { path: string }).path = s.path;
+        }
+        if (s.interface) {
+          (skill as { interface: NonNullable<CodexSkill["interface"]> }).interface = s.interface;
+        }
+        skills.push(skill);
+      }
+      return skills;
+    } catch (error) {
+      console.warn("skills/list failed", error);
+      return [];
+    }
   }
 
   async readThread(threadId: ThreadId): Promise<CodexThreadSnapshot> {
