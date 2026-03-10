@@ -532,6 +532,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private readonly sessions = new Map<ThreadId, CodexSessionContext>();
   private skillsHandle: JsonRpcProcessHandle | null = null;
   private skillsHandlePromise: Promise<JsonRpcProcessHandle> | null = null;
+  /** Codex binary/home overrides observed from the most recent session start. */
+  private codexBinaryPath = "codex";
+  private codexHomePath: string | undefined;
 
   private runPromise: (effect: Effect.Effect<unknown, never>) => Promise<unknown>;
   constructor(services?: ServiceMap.ServiceMap<never>) {
@@ -561,6 +564,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const codexOptions = readCodexProviderOptions(input);
       const codexBinaryPath = codexOptions.binaryPath ?? "codex";
       const codexHomePath = codexOptions.homePath;
+      this.codexBinaryPath = codexBinaryPath;
+      this.codexHomePath = codexHomePath;
       this.assertSupportedCodexCliVersion({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
@@ -895,9 +900,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
 
     this.skillsHandlePromise = (async () => {
-      const child = spawn("codex", ["app-server"], {
+      const child = spawn(this.codexBinaryPath, ["app-server"], {
         cwd,
-        env: { ...process.env },
+        env: {
+          ...process.env,
+          ...(this.codexHomePath ? { CODEX_HOME: this.codexHomePath } : {}),
+        },
         stdio: ["pipe", "pipe", "pipe"],
         shell: process.platform === "win32",
       });
@@ -957,7 +965,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     this.skillsHandle = null;
     this.skillsHandlePromise = null;
     if (handle) {
-      handle.child.kill();
+      for (const pending of handle.pending.values()) {
+        clearTimeout(pending.timeout);
+        pending.reject(new Error("Skills handle stopped."));
+      }
+      handle.pending.clear();
+      handle.output.close();
+      killChildTree(handle.child);
     }
   }
 
