@@ -1364,6 +1364,17 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
                 ? { interactionMode: input.interactionMode }
                 : {}),
               ...(codexAttachments.length > 0 ? { attachments: codexAttachments } : {}),
+              ...(input.skillSelections !== undefined && input.skillSelections.length > 0
+                ? {
+                    skillInputs: input.skillSelections
+                      .filter((s) => s.path !== undefined)
+                      .map((s) => ({
+                        type: "skill" as const,
+                        name: s.name,
+                        path: s.path!,
+                      })),
+                  }
+                : {}),
             };
             return manager.sendTurn(managerInput);
           },

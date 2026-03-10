@@ -23,6 +23,7 @@ import {
   ProviderUserInputAnswers,
   RuntimeMode,
 } from "./orchestration";
+import { CodexSkillSelection } from "./skill";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 const ProviderSessionStatus = Schema.Literals([
@@ -81,6 +82,7 @@ export const ProviderSendTurnInput = Schema.Struct({
   attachments: Schema.optional(
     Schema.Array(ChatAttachment).check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_ATTACHMENTS)),
   ),
+  skillSelections: Schema.optional(Schema.Array(CodexSkillSelection)),
   model: Schema.optional(TrimmedNonEmptyStringSchema),
   serviceTier: Schema.optional(Schema.NullOr(ProviderServiceTier)),
   modelOptions: Schema.optional(ProviderModelOptions),
