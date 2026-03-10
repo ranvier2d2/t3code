@@ -536,10 +536,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private codexBinaryPath = "codex";
   private codexHomePath: string | undefined;
 
-  // ── Skills TTL cache ───────────────────────────────────────────────
+  // ── Skills TTL cache (keyed by cwd) ─────────────────────────────────
   private static readonly SKILLS_CACHE_TTL_MS = 15_000;
-  private skillsCache: { skills: CodexSkill[]; fetchedAt: number } | null = null;
-  private skillsFetchPromise: Promise<CodexSkill[]> | null = null;
+  private skillsCacheByCwd = new Map<string, { skills: CodexSkill[]; fetchedAt: number }>();
+  private skillsFetchPromiseByCwd = new Map<string, Promise<CodexSkill[]>>();
 
   private runPromise: (effect: Effect.Effect<unknown, never>) => Promise<unknown>;
   constructor(services?: ServiceMap.ServiceMap<never>) {
@@ -982,27 +982,27 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   /** Invalidate the skills TTL cache (e.g. on skills/changed notification). */
   invalidateSkillsCache(): void {
-    this.skillsCache = null;
+    this.skillsCacheByCwd.clear();
   }
 
   async listSkills(cwd: string): Promise<CodexSkill[]> {
     // Return cached result if still fresh.
-    if (
-      this.skillsCache &&
-      Date.now() - this.skillsCache.fetchedAt < CodexAppServerManager.SKILLS_CACHE_TTL_MS
-    ) {
-      return this.skillsCache.skills;
+    const cached = this.skillsCacheByCwd.get(cwd);
+    if (cached && Date.now() - cached.fetchedAt < CodexAppServerManager.SKILLS_CACHE_TTL_MS) {
+      return cached.skills;
     }
 
-    // Deduplicate in-flight requests.
-    if (this.skillsFetchPromise) {
-      return this.skillsFetchPromise;
+    // Deduplicate in-flight requests for the same cwd.
+    const inflight = this.skillsFetchPromiseByCwd.get(cwd);
+    if (inflight) {
+      return inflight;
     }
 
-    this.skillsFetchPromise = this.fetchSkills(cwd).finally(() => {
-      this.skillsFetchPromise = null;
+    const promise = this.fetchSkills(cwd).finally(() => {
+      this.skillsFetchPromiseByCwd.delete(cwd);
     });
-    return this.skillsFetchPromise;
+    this.skillsFetchPromiseByCwd.set(cwd, promise);
+    return promise;
   }
 
   private async fetchSkills(cwd: string): Promise<CodexSkill[]> {
@@ -1057,7 +1057,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         }
         skills.push(skill);
       }
-      this.skillsCache = { skills, fetchedAt: Date.now() };
+      this.skillsCacheByCwd.set(cwd, { skills, fetchedAt: Date.now() });
       return skills;
     } catch (error) {
       console.warn("skills/list failed", error);

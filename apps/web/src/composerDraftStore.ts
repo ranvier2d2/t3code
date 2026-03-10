@@ -35,7 +35,7 @@ export interface ComposerImageAttachment extends Omit<ChatImageAttachment, "prev
 
 export interface SkillSelection {
   name: string;
-  path: string;
+  path?: string;
 }
 
 interface PersistedComposerThreadDraftState {
@@ -405,6 +405,24 @@ function normalizePersistedComposerDraftState(value: unknown): PersistedComposer
     const codexFastMode =
       draftCandidate.codexFastMode === true ||
       (typeof draftCandidate.serviceTier === "string" && draftCandidate.serviceTier === "fast");
+    const skillSelections = Array.isArray(draftCandidate.skillSelections)
+      ? (draftCandidate.skillSelections as unknown[]).flatMap((entry) => {
+          if (
+            entry &&
+            typeof entry === "object" &&
+            typeof (entry as Record<string, unknown>).name === "string" &&
+            (entry as Record<string, unknown>).name !== ""
+          ) {
+            const sel: SkillSelection = { name: (entry as Record<string, unknown>).name as string };
+            const path = (entry as Record<string, unknown>).path;
+            if (typeof path === "string" && path.length > 0) {
+              sel.path = path;
+            }
+            return [sel];
+          }
+          return [];
+        })
+      : [];
     if (
       prompt.length === 0 &&
       attachments.length === 0 &&
@@ -413,7 +431,8 @@ function normalizePersistedComposerDraftState(value: unknown): PersistedComposer
       !runtimeMode &&
       !interactionMode &&
       !effort &&
-      !codexFastMode
+      !codexFastMode &&
+      skillSelections.length === 0
     ) {
       continue;
     }
@@ -426,6 +445,7 @@ function normalizePersistedComposerDraftState(value: unknown): PersistedComposer
       ...(interactionMode ? { interactionMode } : {}),
       ...(effort ? { effort } : {}),
       ...(codexFastMode ? { codexFastMode } : {}),
+      ...(skillSelections.length > 0 ? { skillSelections } : {}),
     };
   }
   return {
@@ -1251,7 +1271,8 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             draft.runtimeMode === null &&
             draft.interactionMode === null &&
             draft.effort === null &&
-            draft.codexFastMode === false
+            draft.codexFastMode === false &&
+            draft.skillSelections.length === 0
           ) {
             continue;
           }
@@ -1276,6 +1297,9 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           }
           if (draft.codexFastMode) {
             persistedDraft.codexFastMode = true;
+          }
+          if (draft.skillSelections.length > 0) {
+            persistedDraft.skillSelections = draft.skillSelections;
           }
           persistedDraftsByThreadId[threadId as ThreadId] = persistedDraft;
         }

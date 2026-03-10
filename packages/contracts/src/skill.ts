@@ -31,6 +31,6 @@ export type SkillsListResult = typeof SkillsListResult.Type;
 
 export const CodexSkillSelection = Schema.Struct({
   name: TrimmedNonEmptyString,
-  path: TrimmedNonEmptyString,
+  path: Schema.optional(TrimmedNonEmptyString),
 });
 export type CodexSkillSelection = typeof CodexSkillSelection.Type;

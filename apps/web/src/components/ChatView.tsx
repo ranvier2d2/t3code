@@ -2710,12 +2710,13 @@ export default function ChatView({ threadId }: ChatViewProps) {
       const turnAttachments = await turnAttachmentsPromise;
 
       // Reconcile skill selections at send time: only include skills whose
-      // $name token still appears in the final prompt text.
+      // exact $name token still appears in the final prompt text.
       const rawSkillSelections = getSkillSelections(threadIdForSend);
       const promptText = trimmed || IMAGE_ONLY_BOOTSTRAP_PROMPT;
-      const activeSkillSelections = rawSkillSelections.filter((s) =>
-        promptText.includes(`$${s.name}`),
-      );
+      const activeSkillSelections = rawSkillSelections.filter((s) => {
+        const pattern = new RegExp(`\\$${s.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w])`)
+        return pattern.test(promptText);
+      });
 
       await api.orchestration.dispatchCommand({
         type: "thread.turn.start",
@@ -3317,7 +3318,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         if (applied && activeThreadId) {
           addSkillSelection(activeThreadId, {
             name: item.skillName,
-            path: item.skillPath ?? "",
+            ...(item.skillPath ? { path: item.skillPath } : {}),
           });
           setComposerHighlightedItemId(null);
         }
