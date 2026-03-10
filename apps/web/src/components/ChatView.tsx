@@ -577,10 +577,10 @@ const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
               ? props.triggerKind === "skill"
                 ? "Loading skills..."
                 : "Searching workspace files..."
-              : props.triggerKind === "path"
-                ? "No matching files or folders."
-                : props.triggerKind === "skill"
-                  ? "No skills found."
+              : props.triggerKind === "skill"
+                ? "No skills found."
+                : props.triggerKind === "path"
+                  ? "No matching files or folders."
                   : "No matching command."}
           </p>
         )}
@@ -632,6 +632,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
     (store) => store.syncPersistedAttachments,
   );
   const clearComposerDraftContent = useComposerDraftStore((store) => store.clearComposerContent);
+  const addSkillSelection = useComposerDraftStore((store) => store.addSkillSelection);
+  const clearSkillSelections = useComposerDraftStore((store) => store.clearSkillSelections);
+  const getSkillSelections = useComposerDraftStore((store) => store.getSkillSelections);
   const clearDraftThread = useComposerDraftStore((store) => store.clearDraftThread);
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
   const getDraftThreadByProjectId = useComposerDraftStore(
@@ -2819,6 +2822,16 @@ export default function ChatView({ threadId }: ChatViewProps) {
 
       beginSendPhase("sending-turn");
       const turnAttachments = await turnAttachmentsPromise;
+
+      // Reconcile skill selections at send time: only include skills whose
+      // exact $name token still appears in the final prompt text.
+      const rawSkillSelections = getSkillSelections(threadIdForSend);
+      const promptText = trimmed || IMAGE_ONLY_BOOTSTRAP_PROMPT;
+      const activeSkillSelections = rawSkillSelections.filter((s) => {
+        const pattern = new RegExp(`\\$${s.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w])`)
+        return pattern.test(promptText);
+      });
+
       await api.orchestration.dispatchCommand({
         type: "thread.turn.start",
         commandId: newCommandId(),
@@ -2826,7 +2839,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         message: {
           messageId: messageIdForSend,
           role: "user",
-          text: trimmed || IMAGE_ONLY_BOOTSTRAP_PROMPT,
+          text: promptText,
           attachments: turnAttachments,
         },
         model: selectedModel || undefined,
@@ -2834,6 +2847,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
           ? { modelOptions: selectedModelOptionsForDispatch }
           : {}),
         ...(providerOptionsForDispatch ? { providerOptions: providerOptionsForDispatch } : {}),
+        ...(activeSkillSelections.length > 0
+          ? { skillSelections: activeSkillSelections }
+          : {}),
         provider: selectedProvider,
         assistantDeliveryMode: settings.enableAssistantStreaming ? "streaming" : "buffered",
         runtimeMode,
@@ -2841,6 +2857,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         createdAt: messageCreatedAt,
       });
       turnStartSucceeded = true;
+      clearSkillSelections(threadIdForSend);
       if (isFirstMessage) {
         clearDraftThread(threadIdForSend);
       }
@@ -3405,7 +3422,11 @@ export default function ChatView({ threadId }: ChatViewProps) {
           `$${item.skillName} `,
           { expectedText: expectedToken },
         );
-        if (applied) {
+        if (applied && activeThreadId) {
+          addSkillSelection(activeThreadId, {
+            name: item.skillName,
+            ...(item.skillPath ? { path: item.skillPath } : {}),
+          });
           setComposerHighlightedItemId(null);
         }
         return;
@@ -3450,6 +3471,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
       }
     },
     [
+      activeThreadId,
+      addSkillSelection,
       applyPromptReplacement,
       handleInteractionModeChange,
       onProviderModelSelect,
