@@ -569,13 +569,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const codexOptions = readCodexProviderOptions(input);
       const codexBinaryPath = codexOptions.binaryPath ?? "codex";
       const codexHomePath = codexOptions.homePath;
-      this.codexBinaryPath = codexBinaryPath;
-      this.codexHomePath = codexHomePath;
       this.assertSupportedCodexCliVersion({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
       });
+      // Only persist overrides after the binary has been validated.
+      this.codexBinaryPath = codexBinaryPath;
+      this.codexHomePath = codexHomePath;
       const child = spawn(codexBinaryPath, ["app-server"], {
         cwd: resolvedCwd,
         env: {
@@ -935,23 +936,21 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         }
       });
 
-      // Clean up on unexpected exit so the next call re-spawns.
-      child.on("exit", () => {
-        if (this.skillsHandle === handle) {
-          this.skillsHandle = null;
-        }
-      });
-      child.on("error", () => {
-        if (this.skillsHandle === handle) {
-          this.skillsHandle = null;
-        }
-      });
+      // Register the handle early so stopSkillsHandle() can see it during init.
+      this.skillsHandle = handle;
+
+      child.on("exit", () => this.cleanupSkillsHandle(handle));
+      child.on("error", () => this.cleanupSkillsHandle(handle));
       child.stderr.resume(); // drain stderr to avoid backpressure
 
-      await this.sendRequest(handle, "initialize", buildCodexInitializeParams());
-      this.writeMessage(handle, { method: "initialized" });
+      try {
+        await this.sendRequest(handle, "initialize", buildCodexInitializeParams());
+        this.writeMessage(handle, { method: "initialized" });
+      } catch (initError) {
+        this.cleanupSkillsHandle(handle);
+        throw initError;
+      }
 
-      this.skillsHandle = handle;
       this.skillsHandlePromise = null;
       return handle;
     })();
@@ -964,19 +963,26 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
   }
 
+  /** Idempotent cleanup for a skills-only app-server handle. */
+  private cleanupSkillsHandle(handle: JsonRpcProcessHandle): void {
+    if (this.skillsHandle === handle) {
+      this.skillsHandle = null;
+    }
+    for (const pending of handle.pending.values()) {
+      clearTimeout(pending.timeout);
+      pending.reject(new Error("Skills handle stopped."));
+    }
+    handle.pending.clear();
+    handle.output.close();
+    killChildTree(handle.child);
+  }
+
   /** Tear down the skills-only app-server process if running. */
   stopSkillsHandle(): void {
     const handle = this.skillsHandle;
-    this.skillsHandle = null;
     this.skillsHandlePromise = null;
     if (handle) {
-      for (const pending of handle.pending.values()) {
-        clearTimeout(pending.timeout);
-        pending.reject(new Error("Skills handle stopped."));
-      }
-      handle.pending.clear();
-      handle.output.close();
-      killChildTree(handle.child);
+      this.cleanupSkillsHandle(handle);
     }
   }
 
@@ -1006,8 +1012,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   private async fetchSkills(cwd: string): Promise<CodexSkill[]> {
-    // Prefer an active session's process; fall back to dedicated skills handle.
-    const context = this.sessions.values().next().value as CodexSessionContext | undefined;
+    // Prefer a session whose cwd matches; fall back to dedicated skills handle.
+    let context: CodexSessionContext | undefined;
+    for (const ctx of this.sessions.values()) {
+      if (ctx.session.cwd === cwd) {
+        context = ctx;
+        break;
+      }
+    }
     const handle = context ?? (await this.ensureSkillsHandle(cwd));
     try {
       const response = await this.sendRequest(handle, "skills/list", {
