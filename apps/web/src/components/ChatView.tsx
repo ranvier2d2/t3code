@@ -51,6 +51,7 @@ import {
 import { gitBranchesQueryOptions, gitCreateWorktreeMutationOptions } from "~/lib/gitReactQuery";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { skillsListQueryOptions } from "~/lib/skillsReactQuery";
+import { reconcileSkillSelectionsAtSendTime } from "~/skillReconciliation";
 import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
 
 import { isElectron } from "../env";
@@ -2827,10 +2828,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       // exact $name token still appears in the final prompt text.
       const rawSkillSelections = getSkillSelections(threadIdForSend);
       const promptText = trimmed || IMAGE_ONLY_BOOTSTRAP_PROMPT;
-      const activeSkillSelections = rawSkillSelections.filter((s) => {
-        const pattern = new RegExp(`\\$${s.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w])`)
-        return pattern.test(promptText);
-      });
+      const activeSkillSelections = reconcileSkillSelectionsAtSendTime(rawSkillSelections, promptText);
 
       await api.orchestration.dispatchCommand({
         type: "thread.turn.start",
