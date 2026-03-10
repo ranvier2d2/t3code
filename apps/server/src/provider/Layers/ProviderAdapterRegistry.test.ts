@@ -30,10 +30,7 @@ const fakeCodexAdapter: CodexAdapterShape = {
 
 const layer = it.layer(
   Layer.mergeAll(
-    Layer.provide(
-      ProviderAdapterRegistryLive,
-      Layer.succeed(CodexAdapter, fakeCodexAdapter),
-    ),
+    Layer.provide(ProviderAdapterRegistryLive, Layer.succeed(CodexAdapter, fakeCodexAdapter)),
     NodeServices.layer,
   ),
 );
