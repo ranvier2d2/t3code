@@ -579,3 +579,80 @@ describe("createDebouncedStorage", () => {
     expect(base.setItem).toHaveBeenCalledWith("key", "v2");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Skill selections
+// ---------------------------------------------------------------------------
+
+describe("composerDraftStore skill selections", () => {
+  const threadId = ThreadId.makeUnsafe("thread-skills");
+
+  beforeEach(() => {
+    useComposerDraftStore.setState({
+      draftsByThreadId: {},
+      draftThreadsByThreadId: {},
+      projectDraftThreadIdByProjectId: {},
+    });
+  });
+
+  it("adds a skill selection to the draft", () => {
+    const store = useComposerDraftStore.getState();
+    store.addSkillSelection(threadId, { name: "deploy", path: "/skills/deploy/SKILL.md" });
+
+    const selections = useComposerDraftStore.getState().getSkillSelections(threadId);
+    expect(selections).toEqual([{ name: "deploy", path: "/skills/deploy/SKILL.md" }]);
+  });
+
+  it("deduplicates skill selections by name", () => {
+    const store = useComposerDraftStore.getState();
+    store.addSkillSelection(threadId, { name: "deploy", path: "/skills/deploy/SKILL.md" });
+    store.addSkillSelection(threadId, { name: "deploy", path: "/skills/deploy/SKILL.md" });
+
+    const selections = useComposerDraftStore.getState().getSkillSelections(threadId);
+    expect(selections).toHaveLength(1);
+  });
+
+  it("removes a skill selection by name", () => {
+    const store = useComposerDraftStore.getState();
+    store.addSkillSelection(threadId, { name: "deploy" });
+    store.addSkillSelection(threadId, { name: "code-review" });
+    store.removeSkillSelection(threadId, "deploy");
+
+    const selections = useComposerDraftStore.getState().getSkillSelections(threadId);
+    expect(selections).toEqual([{ name: "code-review" }]);
+  });
+
+  it("clears all skill selections", () => {
+    const store = useComposerDraftStore.getState();
+    store.addSkillSelection(threadId, { name: "deploy" });
+    store.addSkillSelection(threadId, { name: "code-review" });
+    store.clearSkillSelections(threadId);
+
+    const selections = useComposerDraftStore.getState().getSkillSelections(threadId);
+    expect(selections).toEqual([]);
+  });
+
+  it("returns empty array for thread with no selections", () => {
+    const selections = useComposerDraftStore
+      .getState()
+      .getSkillSelections(ThreadId.makeUnsafe("nonexistent"));
+    expect(selections).toEqual([]);
+  });
+
+  it("removes the draft entry when clearing selections leaves it empty", () => {
+    const store = useComposerDraftStore.getState();
+    store.addSkillSelection(threadId, { name: "deploy" });
+    store.removeSkillSelection(threadId, "deploy");
+
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
+  });
+
+  it("clearComposerContent also clears skill selections", () => {
+    const store = useComposerDraftStore.getState();
+    store.setPrompt(threadId, "hello $deploy");
+    store.addSkillSelection(threadId, { name: "deploy" });
+    store.clearComposerContent(threadId);
+
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
+  });
+});
