@@ -28,3 +28,9 @@ export const SkillsListResult = Schema.Struct({
   skills: Schema.Array(Skill),
 });
 export type SkillsListResult = typeof SkillsListResult.Type;
+
+export const CodexSkillSelection = Schema.Struct({
+  name: TrimmedNonEmptyString,
+  path: TrimmedNonEmptyString,
+});
+export type CodexSkillSelection = typeof CodexSkillSelection.Type;

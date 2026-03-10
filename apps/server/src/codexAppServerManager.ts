@@ -536,6 +536,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private codexBinaryPath = "codex";
   private codexHomePath: string | undefined;
 
+  // ── Skills TTL cache ───────────────────────────────────────────────
+  private static readonly SKILLS_CACHE_TTL_MS = 15_000;
+  private skillsCache: { skills: CodexSkill[]; fetchedAt: number } | null = null;
+  private skillsFetchPromise: Promise<CodexSkill[]> | null = null;
+
   private runPromise: (effect: Effect.Effect<unknown, never>) => Promise<unknown>;
   constructor(services?: ServiceMap.ServiceMap<never>) {
     super();
@@ -975,7 +980,32 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
   }
 
+  /** Invalidate the skills TTL cache (e.g. on skills/changed notification). */
+  invalidateSkillsCache(): void {
+    this.skillsCache = null;
+  }
+
   async listSkills(cwd: string): Promise<CodexSkill[]> {
+    // Return cached result if still fresh.
+    if (
+      this.skillsCache &&
+      Date.now() - this.skillsCache.fetchedAt < CodexAppServerManager.SKILLS_CACHE_TTL_MS
+    ) {
+      return this.skillsCache.skills;
+    }
+
+    // Deduplicate in-flight requests.
+    if (this.skillsFetchPromise) {
+      return this.skillsFetchPromise;
+    }
+
+    this.skillsFetchPromise = this.fetchSkills(cwd).finally(() => {
+      this.skillsFetchPromise = null;
+    });
+    return this.skillsFetchPromise;
+  }
+
+  private async fetchSkills(cwd: string): Promise<CodexSkill[]> {
     // Prefer an active session's process; fall back to dedicated skills handle.
     const context = this.sessions.values().next().value as CodexSessionContext | undefined;
     const handle = context ?? (await this.ensureSkillsHandle(cwd));
@@ -1027,6 +1057,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         }
         skills.push(skill);
       }
+      this.skillsCache = { skills, fetchedAt: Date.now() };
       return skills;
     } catch (error) {
       console.warn("skills/list failed", error);
@@ -1350,6 +1381,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         activeTurnId: undefined,
         lastError: errorMessage ?? context.session.lastError,
       });
+      return;
+    }
+
+    if (notification.method === "skills/changed") {
+      this.invalidateSkillsCache();
       return;
     }
 
