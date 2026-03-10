@@ -532,14 +532,17 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private readonly sessions = new Map<ThreadId, CodexSessionContext>();
   private skillsHandle: JsonRpcProcessHandle | null = null;
   private skillsHandlePromise: Promise<JsonRpcProcessHandle> | null = null;
+  /** Binary/home config the current skills handle was spawned with. */
+  private skillsHandleBinaryPath: string | undefined;
+  private skillsHandleHomePath: string | undefined;
   /** Codex binary/home overrides observed from the most recent session start. */
   private codexBinaryPath = "codex";
   private codexHomePath: string | undefined;
 
-  // ── Skills TTL cache (keyed by cwd) ─────────────────────────────────
+  // ── Skills TTL cache (keyed by cwd + binaryPath + homePath) ─────────
   private static readonly SKILLS_CACHE_TTL_MS = 15_000;
-  private skillsCacheByCwd = new Map<string, { skills: CodexSkill[]; fetchedAt: number }>();
-  private skillsFetchPromiseByCwd = new Map<string, Promise<CodexSkill[]>>();
+  private skillsCache = new Map<string, { skills: CodexSkill[]; fetchedAt: number }>();
+  private skillsFetchPromise = new Map<string, Promise<CodexSkill[]>>();
 
   private runPromise: (effect: Effect.Effect<unknown, never>) => Promise<unknown>;
   constructor(services?: ServiceMap.ServiceMap<never>) {
@@ -893,13 +896,28 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     });
   }
 
+  /** Composite cache key that includes binary/home config so stale entries are not reused. */
+  private skillsCacheKey(cwd: string): string {
+    return JSON.stringify({ cwd, binaryPath: this.codexBinaryPath, homePath: this.codexHomePath ?? null });
+  }
+
   /**
    * Lazily start a lightweight codex app-server used only for metadata queries
    * like `skills/list`. The process is initialized once and reused across calls.
+   * If the codex binary/home config has changed since the handle was created,
+   * the stale handle is torn down and a fresh one is spawned.
    */
   private async ensureSkillsHandle(cwd: string): Promise<JsonRpcProcessHandle> {
     if (this.skillsHandle) {
-      return this.skillsHandle;
+      if (
+        this.skillsHandleBinaryPath !== this.codexBinaryPath ||
+        this.skillsHandleHomePath !== this.codexHomePath
+      ) {
+        // Config changed (e.g. user edited Settings). Tear down stale handle.
+        this.cleanupSkillsHandle(this.skillsHandle);
+      } else {
+        return this.skillsHandle;
+      }
     }
     if (this.skillsHandlePromise) {
       return this.skillsHandlePromise;
@@ -938,6 +956,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
       // Register the handle early so stopSkillsHandle() can see it during init.
       this.skillsHandle = handle;
+      this.skillsHandleBinaryPath = this.codexBinaryPath;
+      this.skillsHandleHomePath = this.codexHomePath;
 
       child.on("exit", () => this.cleanupSkillsHandle(handle));
       child.on("error", () => this.cleanupSkillsHandle(handle));
@@ -988,26 +1008,28 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   /** Invalidate the skills TTL cache (e.g. on skills/changed notification). */
   invalidateSkillsCache(): void {
-    this.skillsCacheByCwd.clear();
+    this.skillsCache.clear();
   }
 
   async listSkills(cwd: string): Promise<CodexSkill[]> {
+    const cacheKey = this.skillsCacheKey(cwd);
+
     // Return cached result if still fresh.
-    const cached = this.skillsCacheByCwd.get(cwd);
+    const cached = this.skillsCache.get(cacheKey);
     if (cached && Date.now() - cached.fetchedAt < CodexAppServerManager.SKILLS_CACHE_TTL_MS) {
       return cached.skills;
     }
 
-    // Deduplicate in-flight requests for the same cwd.
-    const inflight = this.skillsFetchPromiseByCwd.get(cwd);
+    // Deduplicate in-flight requests for the same config.
+    const inflight = this.skillsFetchPromise.get(cacheKey);
     if (inflight) {
       return inflight;
     }
 
     const promise = this.fetchSkills(cwd).finally(() => {
-      this.skillsFetchPromiseByCwd.delete(cwd);
+      this.skillsFetchPromise.delete(cacheKey);
     });
-    this.skillsFetchPromiseByCwd.set(cwd, promise);
+    this.skillsFetchPromise.set(cacheKey, promise);
     return promise;
   }
 
@@ -1069,7 +1091,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         }
         skills.push(skill);
       }
-      this.skillsCacheByCwd.set(cwd, { skills, fetchedAt: Date.now() });
+      this.skillsCache.set(this.skillsCacheKey(cwd), { skills, fetchedAt: Date.now() });
       return skills;
     } catch (error) {
       console.warn("skills/list failed", error);
